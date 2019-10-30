@@ -29,7 +29,7 @@ def pytest_runtest_makereport(item, call, __multicall__):
 
 @pytest.fixture(scope='function', autouse=True)
 def test_result(request, run, pytestconfig, get_influxdb, project, version, influxdb_values, db_host, db_port, db_name,
-                db_user, db_password):
+                db_user, db_password, db_ssl):
     if pytestconfig.getoption('--influxdb-pytest'):
         test_name = request.node.nodeid
         test_result_dto_dict = session_dict.get('test_result_dto_session_dict')
@@ -87,7 +87,7 @@ def test_result(request, run, pytestconfig, get_influxdb, project, version, infl
             influxdb_components.get_client().write_points(test_json)
             request.node.user_properties = (
                 dict(influxdb_host=db_host, influxdb_port=db_port, influxdb_user=db_user, influxdb_password=db_password,
-                     influxdb_name=db_name, influxdb_values=influxdb_values),)
+                     influxdb_name=db_name, influxdb_values=influxdb_values, influxdb_ssl=db_ssl),)
 
         request.addfinalizer(fin)
 
@@ -113,6 +113,7 @@ def pytest_configure(config):
     config.getini("influxdb_name")
     config.getini("influxdb_project")
     config.getini("influxdb_values")
+    config.getini("influxdb_ssl")
 
     if is_master(config):
         config.shared_directory = tempfile.gettempdir()
@@ -149,6 +150,9 @@ def pytest_addoption(parser):
     parser.addoption(
         "--influxdb_values", action="store", default=None, help="my option: version"
     )
+    parser.addoption(
+        "--influxdb_ssl", action="store_true", default=False, help="my option: db_ssl"
+    )
     parser.addini(
         'influxdb_run_id',
         help='my option: run_id')
@@ -176,6 +180,9 @@ def pytest_addoption(parser):
     parser.addini(
         'influxdb_values',
         help='my option: db_values')
+    parser.addini(
+        'influxdb_ssl',
+        help='my option: db_ssl')
 
 
 @pytest.fixture
@@ -239,11 +246,17 @@ def version(request):
 def influxdb_values(request):
     return request.config.getoption("--influxdb_values")
 
+@pytest.fixture
+def db_ssl(request, pytestconfig):
+    db_ssl = request.config.getoption("--influxdb_ssl")
+    if not db_ssl:
+        db_ssl = pytestconfig.getini("influxdb_ssl")
+    return db_ssl
 
 @pytest.fixture()
-def get_influxdb(pytestconfig, db_host, db_port, db_name, db_user, db_password):
+def get_influxdb(pytestconfig, db_host, db_port, db_name, db_user, db_password, db_ssl):
     if pytestconfig.getoption('--influxdb-pytest'):
-        influxdb_components = Influxdb_Components(db_host, db_port, db_user, db_password, db_name)
+        influxdb_components = Influxdb_Components(db_host, db_port, db_user, db_password, db_name, db_ssl)
         return influxdb_components
 
 
@@ -386,6 +399,7 @@ def pytest_terminal_summary(config, terminalreporter):
     influxdb_test_password = None
     influxdb_test_name = None
     influxdb_test_values = None
+    influxdb_test_ssl = None
     if config.getoption('--influxdb-pytest') and len(terminalreporter.stats) > 0:
         for test_obj in terminalreporter.stats.get(''):
             if test_obj.when == 'teardown':
@@ -395,6 +409,7 @@ def pytest_terminal_summary(config, terminalreporter):
                 influxdb_test_password = test_obj.user_properties[0]['influxdb_password']
                 influxdb_test_name = test_obj.user_properties[0]['influxdb_name']
                 influxdb_test_values = test_obj.user_properties[0]['influxdb_values']
+                influxdb_test_ssl = test_obj.user_properties[0]['influxdb_ssl']
                 break
 
         db_host = config.getoption("--influxdb_host")
@@ -431,7 +446,13 @@ def pytest_terminal_summary(config, terminalreporter):
         influxdb_values = config.getoption("--influxdb_values")
         if not influxdb_values:
             influxdb_values = influxdb_test_values
-        influxdb_components = Influxdb_Components(db_host, db_port, db_user, db_password, db_name)
+
+        db_ssl = config.getoption("--influxdb_ssl")
+        if not db_ssl:
+            db_ssl = config.getini("--influxdb_ssl")
+            if not db_ssl:
+                db_ssl = influxdb_test_ssl
+        influxdb_components = Influxdb_Components(db_host, db_port, db_user, db_password, db_name, db_ssl)
         db_measurement_name_for_suite = 'suite_result'
         finished_tests_dict = get_finished_tests(file_path)[0]
         suite_result_dto: SuiteResultDTO = get_suite_results_object(finished_tests_dict)
